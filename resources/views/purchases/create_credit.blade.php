@@ -13,7 +13,53 @@
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 </head>
 
-<body class="bg-gray-900 font-sans text-gray-200" x-data="creditPurchaseForm(@json(session('success')), @json(session('error')))">
+<body class="bg-gray-900 font-sans text-gray-200" x-data="creditPurchaseForm()">
+
+    <!-- SweetAlert Flash Messages -->
+    @if(session('success'))
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            Swal.fire({
+                title: 'Success!',
+                text: "{{ session('success') }}",
+                icon: 'success',
+                background: '#1f2937',
+                color: '#fff',
+                confirmButtonColor: '#d97706'
+            });
+        });
+    </script>
+    @endif
+
+    @if(session('error'))
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            Swal.fire({
+                title: 'Error!',
+                text: "{{ session('error') }}",
+                icon: 'error',
+                background: '#1f2937',
+                color: '#fff',
+                confirmButtonColor: '#d97706'
+            });
+        });
+    </script>
+    @endif
+
+    @if($errors->any())
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            Swal.fire({
+                title: 'Validation Error',
+                html: '<ul class="text-left list-disc pl-4">@foreach ($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul>',
+                icon: 'warning',
+                background: '#1f2937',
+                color: '#fff',
+                confirmButtonColor: '#d97706'
+            });
+        });
+    </script>
+    @endif
 
     <nav class="bg-white border-b border-gray-200 px-6 py-3 shadow-sm sticky top-0 z-50 mb-8">
         <div class="container mx-auto max-w-[1400px] flex justify-between items-center">
@@ -56,12 +102,13 @@
                         <div>
                             <label class="block text-xs font-bold text-gray-400 uppercase mb-1">Select Supplier *</label>
                             <div class="flex gap-2">
-                                <select x-model="supplierId" name="supplier_id" class="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-amber-500 outline-none">
+                                <select x-model="supplierId" @change="updateBalance()" name="supplier_id" class="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-white focus:border-amber-500 outline-none">
                                     <option value="">-- Choose Supplier --</option>
                                     @foreach($suppliers as $sup)
                                     <option value="{{ $sup->id }}">{{ $sup->name }}</option>
                                     @endforeach
                                 </select>
+                                <button type="button" @click="showSupplierModal = true" class="bg-amber-600 px-3 rounded text-white hover:bg-amber-700"><i class="fas fa-plus"></i></button>
                             </div>
                         </div>
 
@@ -120,6 +167,7 @@
                                 <th class="p-3 w-32">Expiry</th>
                                 <th class="p-3 w-20 text-center">Qty</th>
                                 <th class="p-3 w-24 text-right">Cost</th>
+                                <th class="p-3 w-20 text-center">In Stock</th>
                                 <th class="p-3 w-24 text-right">Total</th>
                                 <th class="p-3 w-10"></th>
                             </tr>
@@ -134,7 +182,8 @@
                                     </td>
 
                                     <td class="p-3">
-                                        <input type="text" x-model="row.name" class="w-full p-1 border rounded text-xs bg-gray-50" readonly>
+                                        <input type="text" x-model="row.name" class="w-full p-1 border rounded text-xs" placeholder="Item name...">
+                                        <span class="text-[10px] text-gray-400">Stock: <span :class="row.stock > 0 ? 'text-green-600 font-bold' : 'text-red-500 font-bold'" x-text="row.stock ?? '—'"></span></span>
                                         <input type="hidden" :name="`items[${index}][item_id]`" x-model="row.item_id">
                                     </td>
 
@@ -153,6 +202,9 @@
                                     <td class="p-3 text-right font-bold text-gray-900">
                                         <span x-text="(row.qty * row.rate).toFixed(2)"></span>
                                     </td>
+                                    <td class="p-3 text-center">
+                                        <span :class="row.stock > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'" class="text-xs font-bold px-2 py-0.5 rounded-full" x-text="row.stock !== null ? row.stock : '—'"></span>
+                                    </td>
 
                                     <td class="p-3 text-center">
                                         <button type="button" @click="removeRow(index)" class="text-gray-300 hover:text-red-500">
@@ -161,6 +213,45 @@
                                     </td>
                                 </tr>
                             </template>
+
+                            <!-- Live Search Row -->
+                            <tr class="bg-amber-50/50 border-t-2 border-amber-200">
+                                <td class="p-3 text-center"><i class="fas fa-search text-amber-500"></i></td>
+                                <td class="p-3 relative" colspan="7">
+                                    <input
+                                        type="text"
+                                        x-model="searchQuery"
+                                        @input.debounce.200ms="performSearch()"
+                                        @keydown.enter.prevent="selectFirstResult()"
+                                        placeholder="🔍 Type product name or barcode to search and add..."
+                                        class="w-full bg-white border border-amber-300 rounded-lg py-2.5 px-4 text-gray-800 focus:ring-2 focus:ring-amber-500 outline-none placeholder-gray-400 text-sm shadow-sm"
+                                    >
+                                    <!-- Dropdown Results -->
+                                    <div x-show="searchResults.length > 0"
+                                        @click.outside="searchResults = []"
+                                        class="absolute top-14 left-3 w-[95%] bg-white border border-amber-200 rounded-xl shadow-2xl z-50 max-h-64 overflow-y-auto"
+                                        style="display: none;">
+                                        <ul>
+                                            <template x-for="item in searchResults" :key="item.id">
+                                                <li @click="addItem(item)" class="p-3 hover:bg-amber-500 hover:text-white cursor-pointer flex justify-between items-center border-b border-gray-100 last:border-0 group transition">
+                                                    <div class="flex-1 min-w-0 pr-4">
+                                                        <span class="font-bold text-gray-800 group-hover:text-white block truncate text-sm" x-text="item.name"></span>
+                                                        <span class="text-xs text-gray-400 font-mono group-hover:text-amber-100" x-text="item.code"></span>
+                                                    </div>
+                                                    <div class="text-right whitespace-nowrap">
+                                                        <span class="block font-bold text-amber-600 group-hover:text-white text-sm" x-text="'Rs. ' + item.price"></span>
+                                                        <span class="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded"
+                                                            :class="item.stock_qty > 0 ? 'bg-green-100 text-green-700 group-hover:bg-green-600 group-hover:text-white' : 'bg-red-100 text-red-600'"
+                                                            x-text="item.stock_qty > 0 ? 'Stock: ' + item.stock_qty : 'Out of Stock'"></span>
+                                                    </div>
+                                                </li>
+                                            </template>
+                                        </ul>
+                                    </div>
+                                </td>
+                                <td class="p-3"></td>
+                            </tr>
+
                         </tbody>
                     </table>
                 </div>
@@ -191,8 +282,32 @@
         </form>
     </div>
 
+    <!-- Add Supplier Modal -->
+    <div x-show="showSupplierModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" style="display: none;">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md p-6">
+            <h3 class="text-xl font-bold text-gray-900 mb-4">Add New Supplier</h3>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">Company / Name *</label>
+                    <input type="text" x-model="newSupplier.name" class="w-full border rounded p-2 text-gray-900" placeholder="e.g. ABC Distributors">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">Phone</label>
+                    <input type="text" x-model="newSupplier.phone" class="w-full border rounded p-2 text-gray-900" placeholder="e.g. 03001234567">
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" @click="showSupplierModal = false" class="px-4 py-2 border rounded text-gray-600 hover:bg-gray-100 font-bold">Cancel</button>
+                <button type="button" @click="saveSupplier()" class="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 font-bold">Save Supplier</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        function creditPurchaseForm(sessionSuccess, sessionError) {
+        // Build a lookup map of supplier ID -> current_balance
+        const supplierBalances = @json($suppliers->pluck('current_balance', 'id'));
+
+        function creditPurchaseForm() {
             return {
                 supplierId: '',
                 supplierBalance: '0.00',
@@ -201,61 +316,151 @@
                     code: '',
                     name: '',
                     qty: 1,
-                    rate: 0
+                    rate: 0,
+                    stock: null
                 }],
+                showSupplierModal: false,
+                newSupplier: { name: '', phone: '' },
+                searchQuery: '',
+                searchResults: [],
 
                 init() {
-                    if (sessionSuccess) {
-                        Swal.fire({
-                            icon: 'success',
-                            title: 'Success',
-                            text: successMsg,
-                            confirmButtonColor: '#d97706'
-                        });
+                    // Blade-level scripts handle flash messages
+                },
+
+                updateBalance() {
+                    if (this.supplierId && supplierBalances[this.supplierId] !== undefined) {
+                        this.supplierBalance = parseFloat(supplierBalances[this.supplierId]).toFixed(2);
+                    } else {
+                        this.supplierBalance = '0.00';
+                    }
+                },
+
+                async performSearch() {
+                    if (this.searchQuery.length < 1) {
+                        this.searchResults = [];
+                        return;
+                    }
+                    try {
+                        let response = await fetch(`/cash-sales/search?q=${this.searchQuery}`);
+                        this.searchResults = await response.json();
+                    } catch (e) {
+                        console.error('Search failed');
+                    }
+                },
+
+                addItem(item) {
+                    // Check if item already in rows, if so increment qty
+                    let existing = this.rows.find(r => r.item_id == item.id);
+                    if (existing) {
+                        existing.qty++;
+                    } else {
+                        // Replace the first empty row, or push new
+                        let emptyIdx = this.rows.findIndex(r => !r.item_id);
+                        let newRow = {
+                            item_id: item.id,
+                            code: item.code,
+                            name: item.name,
+                            qty: 1,
+                            rate: item.cost_price || 0,
+                            stock: item.stock_qty ?? 0
+                        };
+                        if (emptyIdx !== -1) {
+                            this.rows[emptyIdx] = newRow;
+                        } else {
+                            this.rows.push(newRow);
+                        }
+                    }
+                    this.searchQuery = '';
+                    this.searchResults = [];
+                },
+
+                selectFirstResult() {
+                    if (this.searchResults.length > 0) this.addItem(this.searchResults[0]);
+                },
+
+                async saveSupplier() {
+                    if (!this.newSupplier.name) {
+                        alert('Supplier name is required.');
+                        return;
                     }
 
-                    if (sessionError) {
-                        Swal.fire({
-                            icon: 'error',
-                            title: 'Error',
-                            text: sessionError,
-                            confirmButtonColor: '#d97706'
+                    try {
+                        let response = await fetch('/suppliers/quick-store', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                            },
+                            body: JSON.stringify(this.newSupplier)
                         });
+
+                        let data = await response.json();
+                        if (data.success) {
+                            let select = document.querySelector('select[name="supplier_id"]');
+                            let option = document.createElement('option');
+                            option.value = data.supplier.id;
+                            option.text = data.supplier.name;
+                            select.add(option);
+                            
+                            this.supplierId = data.supplier.id;
+
+                            this.showSupplierModal = false;
+                            this.newSupplier = { name: '', phone: '' };
+                            
+                            Swal.fire({
+                                title: 'Added!',
+                                text: 'Supplier saved successfully.',
+                                icon: 'success',
+                                background: '#1f2937',
+                                color: '#fff',
+                                timer: 1500,
+                                showConfirmButton: false
+                            });
+                        } else {
+                            alert('Failed to save supplier.');
+                        }
+                    } catch (error) {
+                        console.error('Error:', error);
+                        alert('An error occurred.');
                     }
                 },
 
                 // Real API Fetch
-                fetchProduct(index) {
+                async fetchProduct(index) {
                     const code = this.rows[index].code;
                     if (!code) return;
 
-                    fetch(`/api/products/search?barcode=${code}`)
-                        .then(response => {
-                            if (response.status === 404) throw new Error('Product not found in database.');
-                            if (!response.ok) throw new Error('Server error: ' + response.statusText);
-                            return response.json();
-                        })
-                        .then(data => {
-                            this.rows[index].item_id = data.id;
-                            this.rows[index].name = data.description;
-                            // Note: API currently returns sale_rate. For purchase, user usually enters cost manually.
-                            // We set it to 0 or leave as is if user wants to enter. 
-                            // If the API provided cost_price, we would use it here.
-                            this.rows[index].rate = 0;
+                    try {
+                        let response = await fetch(`/cash-sales/search?q=${code}`);
+                        let data = await response.json();
+
+                        if (data.length > 0) {
+                            // Pick exact match or first item
+                            let item = data.find(i => i.code === code) || data[0];
+                            this.rows[index].item_id = item.id;
+                            this.rows[index].name = item.name;
+                            this.rows[index].rate = item.cost_price || item.price || 0;
+                            this.rows[index].stock = item.stock_qty ?? 0;
 
                             if (index === this.rows.length - 1) this.addRow();
-                        })
-                        .catch(error => {
+                        } else {
                             Swal.fire({
-                                title: 'Error',
-                                text: error.message || 'Product not found or invalid barcode',
-                                icon: 'error',
-                                confirmButtonColor: '#d97706'
+                                title: 'Not Found',
+                                text: 'Product not found!',
+                                icon: 'warning',
+                                background: '#1f2937',
+                                color: '#fff',
+                                timer: 1500,
+                                showConfirmButton: false
                             });
-                            // Clear invalid entry
                             this.rows[index].item_id = '';
                             this.rows[index].name = '';
-                        });
+                            this.rows[index].rate = 0;
+                        }
+                    } catch (error) {
+                        console.error("Search failed");
+                    }
                 },
 
                 addRow() {
@@ -264,7 +469,8 @@
                         code: '',
                         name: '',
                         qty: 1,
-                        rate: 0
+                        rate: 0,
+                        stock: null
                     });
                 },
 
@@ -273,14 +479,12 @@
                 },
 
                 submitForm(e) {
-                    // Basic client-side validation
                     if (!this.supplierId) {
-                        Swal.fire('Error', 'Please select a supplier', 'error');
+                        Swal.fire({ title: 'Error', text: 'Please select a supplier', icon: 'error', confirmButtonColor: '#d97706' });
                         return;
                     }
-
-                    if (this.subtotal <= 0) {
-                        Swal.fire('Error', 'Total amount cannot be zero', 'error');
+                    if (parseFloat(this.subtotal) <= 0) {
+                        Swal.fire({ title: 'Error', text: 'Total amount cannot be zero — please add items.', icon: 'error', confirmButtonColor: '#d97706' });
                         return;
                     }
                     e.target.submit();

@@ -16,8 +16,8 @@ class Supplier extends Model
     // Negative (-) means they owe us (Advance)
     public function getBalanceStatusAttribute()
     {
-        if ($this->balance > 0) return 'Payable';
-        if ($this->balance < 0) return 'Advance';
+        if ($this->current_balance > 0) return 'Payable';
+        if ($this->current_balance < 0) return 'Advance';
         return 'Settled';
     }
 }

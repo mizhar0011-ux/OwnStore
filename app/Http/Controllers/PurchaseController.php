@@ -11,6 +11,7 @@ use App\Models\Batch;
 use App\Models\SupplierLedger;
 use App\Models\Account;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class PurchaseController extends Controller
 {
@@ -30,83 +31,93 @@ class PurchaseController extends Controller
     {
         $request->validate([
             'supplier_id' => 'required',
-            'items' => 'required|array|min:1'
+            'items'       => 'nullable|array'
         ]);
 
+        // Filter out blank rows (no item_id) — rows without item_id are silently skipped
+        $items = array_filter($request->items ?? [], fn($row) => !empty($row['item_id']));
+
         try {
-            DB::transaction(function () use ($request) {
+            DB::transaction(function () use ($request, $items) {
 
                 // 1. Create Purchase Header
                 $paymentType = $request->payment_type ?? 'Cash';
-                $status = ($paymentType === 'Credit') ? 'Pending' : 'Paid';
+                $paymentStatus = ($paymentType === 'Credit') ? 'Pending' : 'Paid';
 
                 // For Credit, paid_from_account should be null
                 $paidFrom = ($paymentType === 'Credit') ? null : $request->paid_from_account;
 
+                // invoice_date is NOT NULL — use today as fallback
+                $invoiceDate = !empty($request->purchase_date) ? $request->purchase_date : now()->toDateString();
+
                 $purchase = Purchase::create([
-                    'purchase_no' => $request->purchase_no,
-                    'vendor_bill_no' => $request->vendor_bill_no,
-                    'purchase_date' => $request->purchase_date,
-                    'supplier_id' => $request->supplier_id,
-                    'paid_from_account' => $paidFrom,
-                    'payment_type' => $paymentType,
-                    'due_date' => $request->due_date,
-                    'payment_status' => $status,
-                    'subtotal' => 0,
-                    'tax_amount' => $request->tax_amount ?? 0,
-                    'discount' => $request->discount ?? 0,
-                    'net_total' => 0,
-                    'user_id' => auth()->id() ?? 1,
-                    'memo' => $request->memo,
+                    'purchase_no'      => $request->purchase_no,
+                    'vendor_bill_no'   => $request->vendor_bill_no,
+                    'invoice_date'     => $invoiceDate,
+                    'supplier_id'      => $request->supplier_id,
+                    'paid_from_account'=> $paidFrom,
+                    'payment_type'     => $paymentType,
+                    'due_date'         => $request->due_date ?? null,
+                    'payment_status'   => $paymentStatus,
+                    'status'           => 'received',
+                    'gross_total'      => 0,
+                    'tax_amount'       => $request->tax_amount ?? 0,
+                    'discount'         => $request->discount ?? 0,
+                    'net_total'        => 0,
+                    'user_id'          => auth()->id() ?? 1,
+                    'notes'            => $request->memo,
                 ]);
 
                 $subtotal = 0;
 
                 // 2. Process Items
-                foreach ($request->items as $row) {
-                    if (!empty($row['item_id'])) {
-                        // Validate Item Exists
-                        $item = Item::find($row['item_id']);
-                        if (!$item) continue;
+                foreach ($items as $row) {
+                    $item = Item::find($row['item_id']);
+                    if (!$item) continue;
 
-                        $line_total = $row['qty'] * $row['rate'];
-                        $subtotal += $line_total;
+                    $line_total = ($row['qty'] ?? 0) * ($row['rate'] ?? 0);
+                    $subtotal += $line_total;
 
-                        PurchaseItem::create([
-                            'purchase_id' => $purchase->id,
-                            'item_id' => $row['item_id'],
-                            'batch_no' => $row['batch_no'] ?? null,
-                            'expiry_date' => $row['expiry_date'] ?? null,
-                            'qty' => $row['qty'],
-                            'cost_rate' => $row['rate'],
-                            'total' => $line_total
-                        ]);
+                    $batchNo = !empty($row['batch_no']) ? $row['batch_no'] : 'B-' . date('Ymd') . '-' . mt_rand(1000, 9999);
 
-                        // 3. INCREMENT Stock & Update Cost
-                        $item->increment('on_hand', $row['qty']);
-                        
-                        // Update Master Item Cost Price
-                        if ($row['rate'] > 0) {
-                            $item->update(['cost_rate' => $row['rate']]);
-                        }
+                    PurchaseItem::create([
+                        'purchase_id' => $purchase->id,
+                        'item_id'     => $row['item_id'],
+                        'batch_no'    => $batchNo,
+                        'expiry_date' => !empty($row['expiry_date']) ? $row['expiry_date'] : null,
+                        'qty'         => $row['qty'],
+                        'cost_rate'   => $row['rate'],
+                        'total'       => $line_total
+                    ]);
 
-                        // 4. CREATE FIFO Batch
-                        Batch::create([
-                            'item_id' => $row['item_id'],
-                            'batch_no' => !empty($row['batch_no']) ? $row['batch_no'] : 'B-' . date('Ymd') . '-' . mt_rand(1000, 9999),
-                            'quantity_available' => $row['qty'],
-                            'sale_price' => $item->sale_rate ?? 0,
-                            'cost_price' => $row['rate'],
-                            'received_at' => $request->purchase_date ?? now(),
-                            'expires_at' => !empty($row['expiry_date']) ? $row['expiry_date'] : null,
-                        ]);
+                    // 3. Increment Stock & Update Master Cost Price
+                    $item->increment('on_hand', $row['qty']);
+                    if ($row['rate'] > 0) {
+                        $item->update(['cost_rate' => $row['rate']]);
                     }
+
+                    // 4. CREATE FIFO Batch
+                    // expires_at is a timestamp column — parse carefully
+                    $expiresAt = null;
+                    if (!empty($row['expiry_date'])) {
+                        try { $expiresAt = Carbon::parse($row['expiry_date']); } catch (\Exception $e) { $expiresAt = null; }
+                    }
+
+                    Batch::create([
+                        'item_id'            => $row['item_id'],
+                        'batch_no'           => $batchNo,
+                        'quantity_available' => $row['qty'],
+                        'sale_price'         => $item->sale_rate ?? 0,
+                        'cost_price'         => $row['rate'],
+                        'received_at'        => Carbon::parse($invoiceDate),
+                        'expires_at'         => $expiresAt,
+                    ]);
                 }
 
                 // 5. Update Header Totals
                 $net_total = $subtotal + ($request->tax_amount ?? 0) - ($request->discount ?? 0);
                 $purchase->update([
-                    'subtotal' => $subtotal,
+                    'gross_total' => $subtotal,
                     'net_total' => $net_total
                 ]);
 
@@ -114,7 +125,7 @@ class PurchaseController extends Controller
                 if ($paymentType === 'Credit') {
                     $supplier = Supplier::find($request->supplier_id);
                     if ($supplier) {
-                        $supplier->increment('balance', $net_total);
+                        $supplier->increment('current_balance', $net_total);
                         
                         // Create Supplier Ledger Entry
                         SupplierLedger::create([
@@ -125,7 +136,7 @@ class PurchaseController extends Controller
                             'description' => 'Purchase Inv: ' . $purchase->purchase_no,
                             'debit' => 0,
                             'credit' => $net_total,
-                            'balance' => $supplier->fresh()->balance
+                            'balance' => $supplier->fresh()->current_balance
                         ]);
                     }
                 } else {
@@ -142,6 +153,7 @@ class PurchaseController extends Controller
 
             return back()->with('success', 'Purchase Recorded! Stock Updated.');
         } catch (\Exception $e) {
+            \Log::error('Purchase Error: ' . $e->getMessage());
             return back()->with('error', 'Error: ' . $e->getMessage());
         }
     }

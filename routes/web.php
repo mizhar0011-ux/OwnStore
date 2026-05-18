@@ -143,6 +143,7 @@ Route::middleware(['auth:web,employee'])->group(function () {
     });
 
     // Supplier Management (Master)
+    Route::post('/suppliers/quick-store', [\App\Http\Controllers\SupplierController::class, 'quickStore'])->name('suppliers.quick-store');
     Route::resource('suppliers', \App\Http\Controllers\SupplierController::class);
 
     // Bank Account Management

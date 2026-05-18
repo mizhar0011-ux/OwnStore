@@ -12,8 +12,8 @@ class SupplierController extends Controller
         $suppliers = Supplier::latest()->paginate(10);
 
         // Calculate Totals for Top Cards
-        $totalPayable = Supplier::where('balance', '>', 0)->sum('balance');
-        $totalAdvance = Supplier::where('balance', '<', 0)->sum('balance');
+        $totalPayable = Supplier::where('current_balance', '>', 0)->sum('current_balance');
+        $totalAdvance = Supplier::where('current_balance', '<', 0)->sum('current_balance');
 
         return view('suppliers.index', compact('suppliers', 'totalPayable', 'totalAdvance'));
     }
@@ -31,7 +31,8 @@ class SupplierController extends Controller
             'company_name' => $request->company_name,
             'phone' => $request->phone,
             'address' => $request->address,
-            'balance' => $request->opening_balance ?? 0, // Opening Balance logic
+            'current_balance' => $request->opening_balance ?? 0,
+            'opening_balance' => $request->opening_balance ?? 0,
         ]);
 
         return redirect()->back()->with('success', 'Supplier Added Successfully');
@@ -61,5 +62,26 @@ class SupplierController extends Controller
     {
         Supplier::findOrFail($id)->delete();
         return redirect()->back()->with('success', 'Supplier Deleted');
+    }
+
+    public function quickStore(Request $request)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'phone' => 'nullable|string|max:20',
+        ]);
+
+        $supplier = Supplier::create([
+            'name' => $request->name,
+            'phone' => $request->phone,
+            'address' => $request->address,
+            'current_balance' => 0,
+            'opening_balance' => 0,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'supplier' => $supplier
+        ]);
     }
 }
